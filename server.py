@@ -24,15 +24,9 @@ def image_upload():
     except:
         print("Exception occured")
         return {
-            "statusCode": 200
+            "statusCode": 500
         }
 
     return {
         "statusCode": 200
     }
-
-
-def readimage(path):
-    count = os.stat(path).st_size / 2
-    with open(path, "rb") as f:
-        return bytearray(f.read())
