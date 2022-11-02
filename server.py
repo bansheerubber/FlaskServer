@@ -33,6 +33,8 @@ def get_file_type(image_bytes):
 		return "exr"
 	elif image_bytes[0:4] == b"\x23\x3F\x52\x41":
 		return "hdr"
+	else:
+		return "unknown"
 
 def load_model(file_name):
 	if not os.path.isfile(file_name):
@@ -88,11 +90,18 @@ def image_upload():
 	request_data = request.get_json()
 	imageData = request_data["imageData"]
 
-	decoded = base64.decodebytes(imageData.encode())
-	classification = str(predict_digit(model, decoded))
+	# decode the image
+	try:
+		decoded = base64.decodebytes(imageData.encode())
+		classification = str(predict_digit(model, decoded))
+		extension = get_file_type(decoded)
+	except:
+		print("Could not classify file")
+		return {
+			"statusCode": 500
+		}
 
 	# ensure that we are not overwriting any files
-	extension = get_file_type(decoded)
 	destination = f"./Images/{classification}"
 	Path(destination).mkdir(parents = True, exist_ok = True)
 	numFiles = len([name for name in os.listdir(destination) if os.path.isfile(f"{destination}/{name}")])
