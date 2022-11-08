@@ -60,11 +60,14 @@ def load_model(file_name):
 		model.fit(x_train, y_train, epochs = 20)
 		model.evaluate(x_test, y_test)
 
-		pickle.dump(model, open(file_name, "wb"))
+		# pickle.dump(model, open(file_name, "wb"))
+		model.save(file_name)
 
-	return pickle.load(open(file_name, "rb"))
+	# return pickle.load(open(file_name, "rb"))
+		return tf.keras.models.load_model(file_name)
 
-model = load_model("model.pickle")
+model = load_model("model.h5")
+# tf.keras.models.load_model("model.h5")
 
 def predict_digit(model, image_bytes): # takes image file name and classifies it
 	img_size = 28
