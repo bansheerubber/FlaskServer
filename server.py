@@ -77,7 +77,7 @@ def predict_digit(model, image_bytes): # takes image file name and classifies it
 
 	grayImage = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY) # greyscale
 	grayImage = ~grayImage # invert image like in dataset
-	(thresh, grayImage) = cv2.threshold(grayImage, 127, 255, cv2.THRESH_BINARY)
+	(thresh, grayImage) = cv2.threshold(grayImage, 200, 255, cv2.THRESH_BINARY)
 	resizedImage = cv2.resize(grayImage, (img_size, img_size), interpolation = cv2.INTER_AREA) # resize image
 	finalImage = tf.keras.utils.normalize(resizedImage, axis = 1)
 	finalImage = np.array(finalImage).reshape(-1, img_size, img_size, 1)
