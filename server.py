@@ -118,7 +118,7 @@ def predict_digit(model, image_bytes): # takes image file name and classifies it
 def server_home():
 	return "<p>Server Running!</p>"
 
-@app.route("/upload", methods=["POST"])
+@app.route("/infer", methods=["POST"])
 def image_upload():
 	global cmodel
 	global classification

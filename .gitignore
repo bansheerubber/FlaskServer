@@ -4,3 +4,4 @@ venv
 prerequisites.txt
 __pycache__/
 Test Images/
+.DS_Store
