@@ -2,3 +2,5 @@ Images
 mc-flask
 venv
 prerequisites.txt
+__pycache__/
+Test Images/

@@ -1,7 +1,7 @@
 import os
 import base64
 from pathlib import Path
-from flask import Flask
+from flask import Flask,current_app
 from flask import request
 import time
 
@@ -11,11 +11,60 @@ import cv2
 import pickle
 from keras import models, layers
 from keras.datasets import mnist
-from keras.layers import Dense, Activation, Dropout, Flatten, Conv2D, MaxPooling2D, MaxPool2D
+from keras.layers import Dense, Activation, Dropout, Flatten, Conv2D, MaxPooling2D, MaxPool2D, BatchNormalization
 from keras.models import Sequential
-
+cmodel = ""
+classification = -1
 app = Flask(__name__)
 
+@app.before_first_request
+def load_model():
+	global cmodel
+	file_name = "model.h5"
+	if not os.path.isfile(file_name):
+		(x_train, y_train) , (x_test, y_test) = mnist.load_data()
+
+		x_train = x_train / 255
+		x_test = x_test / 255
+		x_train = x_train.reshape(-1, 28, 28, 1)
+		x_test = x_test.reshape(-1, 28, 28, 1)
+
+		model = models.Sequential()
+
+		model.add(Conv2D(32,(3,3),strides = (1,1), input_shape = (28, 28, 1)))
+		model.add(BatchNormalization(axis=3))
+		model.add(Activation('relu'))
+		model.add(Conv2D(32,(3,3),strides = (1,1)))
+		model.add(BatchNormalization(axis=3))
+		model.add(Activation('relu'))
+		model.add(MaxPooling2D((2,2),strides = (2,2)))
+		model.add(Conv2D(64,(3,3),strides = (1,1)))
+		model.add(BatchNormalization(axis=3))
+		model.add(Activation('relu'))
+		model.add(Conv2D(64,(3,3),strides = (1,1)))
+		model.add(BatchNormalization(axis=3))
+		model.add(Activation('relu'))
+		model.add(MaxPooling2D((2,2),strides = (2,2)))
+		model.add(Dropout(0.2))
+		model.add(Flatten())
+		model.add(Dense(256,activation = 'relu'))
+		model.add(Dropout(0.4))
+		model.add(Dense(10,activation = 'softmax'))
+		model.compile(optimizer = 'adam', loss = 'categorical_crossentropy', metrics=['accuracy'])
+		model.fit(x_train, y_train, epochs = 20)
+		model.evaluate(x_test, y_test)
+
+		# pickle.dump(model, open(file_name, "wb"))
+		model.save(file_name)
+
+	# return pickle.load(open(file_name, "rb"))
+		# return tf.keras.models.load_model(file_name)
+	cmodel = tf.keras.models.load_model(file_name)
+
+
+	# model = load_model("model.h5")
+
+# handlers.py
 def get_file_type(image_bytes):
 	if image_bytes[0:4] == b"\x89PNG":
 		return "png"
@@ -36,37 +85,9 @@ def get_file_type(image_bytes):
 	else:
 		return "unknown"
 
-def load_model(file_name):
-	if not os.path.isfile(file_name):
-		(x_train, y_train) , (x_test, y_test) = mnist.load_data()
 
-		x_train = x_train / 255
-		x_test = x_test / 255
-		x_train = x_train.reshape(-1, 28, 28, 1)
-		x_test = x_test.reshape(-1, 28, 28, 1)
+# model = load_model("model.h5")
 
-		model = models.Sequential()
-		model.add(Conv2D(32, kernel_size = (3, 3), activation = "relu", input_shape = (28, 28, 1)))
-		model.add(MaxPooling2D((2, 2)))
-		model.add(Conv2D(64, kernel_size = (3, 3), activation = "relu"))
-		model.add(MaxPooling2D((2, 2)))
-		model.add(Conv2D(64, kernel_size = (3, 3), activation = "relu"))
-		model.add(MaxPooling2D((2, 2)))
-		model.add(Flatten())
-		model.add(Dense(64, activation = "relu"))
-		model.add(Dense(10, activation = "softmax"))
-
-		model.compile(optimizer = "adam", loss = "sparse_categorical_crossentropy", metrics = ["accuracy"])
-		model.fit(x_train, y_train, epochs = 20)
-		model.evaluate(x_test, y_test)
-
-		# pickle.dump(model, open(file_name, "wb"))
-		model.save(file_name)
-
-	# return pickle.load(open(file_name, "rb"))
-		return tf.keras.models.load_model(file_name)
-
-model = load_model("model.h5")
 # tf.keras.models.load_model("model.h5")
 
 def predict_digit(model, image_bytes): # takes image file name and classifies it
@@ -74,14 +95,23 @@ def predict_digit(model, image_bytes): # takes image file name and classifies it
 
 	np_array = np.frombuffer(image_bytes, np.uint8)
 	img = cv2.imdecode(np_array, -1)
-
+	# print("img.shape", img.shape)
+	img = cv2.resize(img,(28,28))
 	grayImage = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY) # greyscale
+	# cv2.imshow("Gray",grayImage)
+	# cv2.waitKey(0) 
+  
+	# #closing all open windows 
+	# cv2.destroyAllWindows() 
+	
+	# print("grayImage.shape", grayImage.shape)
 	grayImage = ~grayImage # invert image like in dataset
 	(thresh, grayImage) = cv2.threshold(grayImage, 127, 255, cv2.THRESH_BINARY)
 	resizedImage = cv2.resize(grayImage, (img_size, img_size), interpolation = cv2.INTER_AREA) # resize image
 	finalImage = tf.keras.utils.normalize(resizedImage, axis = 1)
 	finalImage = np.array(finalImage).reshape(-1, img_size, img_size, 1)
 	predictions = model.predict(finalImage)
+	# print("predictions")
 	return np.argmax(predictions)
 
 @app.route("/")
@@ -90,15 +120,22 @@ def server_home():
 
 @app.route("/upload", methods=["POST"])
 def image_upload():
+	global cmodel
+	global classification
 	request_data = request.get_json()
 	imageData = request_data["imageData"]
 
 	# decode the image
 	try:
 		decoded = base64.decodebytes(imageData.encode())
-		classification = str(predict_digit(model, decoded))
+		# print("decoded: ",decoded)
+		
+		# print("cmodel",cmodel)
+		classification = str(predict_digit(cmodel, decoded))
+		print("classification",classification)
 		extension = get_file_type(decoded)
-	except:
+	except Exception as e: 
+		print (str(e))
 		print("Could not classify file")
 		return {
 			"statusCode": 500
@@ -124,5 +161,6 @@ def image_upload():
 		}
 
 	return {
-		"statusCode": 200
+		"statusCode": 200,
+		"classification": classification
 	}
