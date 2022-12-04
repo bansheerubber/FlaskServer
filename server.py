@@ -11,7 +11,7 @@ import cv2
 import pickle
 from keras import models, layers
 from keras.datasets import mnist
-from keras.layers import Dense, Activation, Dropout, Flatten, Conv2D, MaxPooling2D, MaxPool2D
+from keras.layers import Dense, Activation, Dropout, Flatten, Conv2D, MaxPooling2D, MaxPool2D, BatchNormalization
 from keras.models import Sequential
 
 app = Flask(__name__)
@@ -36,38 +36,182 @@ def get_file_type(image_bytes):
 	else:
 		return "unknown"
 
-def load_model(file_name):
+def print_image(image, divisor = 1):
+	# print top border
+	for x in range(0, len(image) + 2):
+		print("-", end = "")
+	print("")
+
+	for x in range(0, len(image)):
+		print("|", end = "") # left border
+		for y in range(0, len(image[x])):
+			if image[x][y] > 128 / divisor:
+				print("#", end = "")
+			elif image[x][y] > 0:
+				print(".", end = "")
+			else:
+				print(" ", end = "")
+
+		print("|") # right border
+
+	# print bottom border
+	for x in range(0, len(image) + 2):
+		print("-", end = "")
+	print("")
+
+# quadrant table:
+# 0: top left
+# 1: bottom left
+# 2: top right
+# 3: bottom right
+def crop_image(image, quadrant):
+	image_half = int(len(image) / 2)
+
+	start_x = quadrant % 2 * image_half
+	end_x = start_x + image_half
+
+	start_y = int(quadrant / 2) * image_half
+	end_y = start_y + image_half
+
+	rows = []
+	for i in range(start_x, end_x):
+		rows.append(image[i][start_y:end_y])
+
+	return np.asarray(rows)
+
+def crop_set(x_set, y_set, debug_level):
+	if debug_level >= 1:
+		print("Cropping set...")
+
+	cropped_x_set = []
+	new_y_set = []
+	for i in range(0, len(x_set)):
+		image = x_set[i]
+		classification = y_set[i]
+		if debug_level >= 2:
+			print_image(image)
+
+		for i in range(0, 4):
+			cropped = crop_image(image, i)
+			cropped_x_set.append(cropped)
+			new_y_set.append(classification)
+
+			if debug_level >= 3:
+				print_image(cropped)
+
+	if debug_level >= 1:
+		print("Done cropping set")
+
+	return (np.asarray(cropped_x_set), np.asarray(new_y_set))
+
+def test_consensus_accuracy(model, x_test, y_test):
+	print("Testing model using group consensus:")
+
+	predictions = model.predict(x_test)
+	correct = 0
+	incorrect = 0
+	for i in range(0, len(predictions), 4):
+		prediction = np.argmax(
+			np.bincount(np.argmax(
+					predictions[i:i + 4],
+					axis = 1
+			))
+		)
+
+		if prediction == y_test[i]:
+			correct += 1
+		else:
+			incorrect += 1
+
+	accuracy = correct / (correct + incorrect)
+	print(f"Consensus accuracy: {accuracy}")
+
+def load_model(file_name, debug_level = 0):
 	if not os.path.isfile(file_name):
-		(x_train, y_train) , (x_test, y_test) = mnist.load_data()
+		(x_train, y_train), (x_test, y_test) = mnist.load_data()
+
+		(x_train, y_train) = crop_set(x_train, y_train, debug_level)
+		(x_test, y_test) = crop_set(x_test, y_test, debug_level)
+
+		image_size = 14
 
 		x_train = x_train / 255
 		x_test = x_test / 255
-		x_train = x_train.reshape(-1, 28, 28, 1)
-		x_test = x_test.reshape(-1, 28, 28, 1)
+		x_train = x_train.reshape(-1, image_size, image_size, 1)
+		x_test = x_test.reshape(-1, image_size, image_size, 1)
+
+		# key: (classification, quadrant)
+		training_bins = {}
+		for i in range(0, len(x_train), 4):
+			for quadrant in range(0, 4):
+				classification = y_train[i]
+				if (classification, quadrant) not in training_bins:
+					training_bins[(classification, quadrant)] = []
+
+				training_bins[(classification, quadrant)].append(x_train[i + quadrant])
 
 		model = models.Sequential()
-		model.add(Conv2D(32, kernel_size = (3, 3), activation = "relu", input_shape = (28, 28, 1)))
+
+		model.add(Conv2D(64, kernel_size = (7, 7), activation = "relu", input_shape = (image_size, image_size, 1), padding = "same"))
+		model.add(BatchNormalization(axis = 3))
+		model.add(Activation('relu'))
 		model.add(MaxPooling2D((2, 2)))
-		model.add(Conv2D(64, kernel_size = (3, 3), activation = "relu"))
+
+		model.add(Conv2D(128, kernel_size = (7, 7), activation = "relu", padding = "same"))
+		model.add(BatchNormalization(axis = 3))
+		model.add(Activation('relu'))
 		model.add(MaxPooling2D((2, 2)))
-		model.add(Conv2D(64, kernel_size = (3, 3), activation = "relu"))
+
+		model.add(Conv2D(128, kernel_size = (7, 7), activation = "relu", padding = "same"))
+		model.add(BatchNormalization(axis = 3))
+		model.add(Activation('relu'))
 		model.add(MaxPooling2D((2, 2)))
+
+		model.add(Dropout(0.2))
 		model.add(Flatten())
-		model.add(Dense(64, activation = "relu"))
+		model.add(Dense(256, activation = 'relu'))
+		model.add(Dropout(0.4))
+
 		model.add(Dense(10, activation = "softmax"))
 
-		model.compile(optimizer = "adam", loss = "sparse_categorical_crossentropy", metrics = ["accuracy"])
-		model.fit(x_train, y_train, epochs = 20)
-		model.evaluate(x_test, y_test)
+		model.compile(
+			optimizer = "adam",
+			loss = "sparse_categorical_crossentropy",
+			metrics = ["accuracy"]
+		)
 
-		# pickle.dump(model, open(file_name, "wb"))
+		model.fit(x_train, y_train, epochs = 20)
+
+		model.evaluate(x_test, y_test)
 		model.save(file_name)
 
-	# return pickle.load(open(file_name, "rb"))
-		return tf.keras.models.load_model(file_name)
+	model = tf.keras.models.load_model(file_name)
 
-model = load_model("model.h5")
-# tf.keras.models.load_model("model.h5")
+	converter = tf.lite.TFLiteConverter.from_keras_model(model)
+	tflite_model = converter.convert()
+	open("model.tflite" , "wb") .write(tflite_model)
+
+	interpreter = tf.lite.Interpreter(model_path = "model.tflite")
+	interpreter.allocate_tensors()
+
+	print(interpreter.get_input_details()[0]['shape'])
+	print(interpreter.get_input_details()[0]['dtype'])
+
+	print(interpreter.get_output_details()[0]['shape'])
+	print(interpreter.get_output_details()[0]['dtype'])
+
+	if debug_level >= 1:
+		(x_train, y_train), (x_test, y_test) = mnist.load_data()
+		(x_test, y_test) = crop_set(x_test, y_test, debug_level)
+
+		x_test = x_test / 255
+		x_test = x_test.reshape(-1, 14, 14, 1)
+
+		test_consensus_accuracy(model, x_test, y_test)
+
+	return model
+
+model = load_model("model.h5", 1)
 
 def predict_digit(model, image_bytes): # takes image file name and classifies it
 	img_size = 28
