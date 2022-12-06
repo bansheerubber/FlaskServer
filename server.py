@@ -14,7 +14,26 @@ from keras.datasets import mnist
 from keras.layers import Dense, Activation, Dropout, Flatten, Conv2D, MaxPooling2D, MaxPool2D, BatchNormalization
 from keras.models import Sequential
 
+from tensorflow.keras.layers.experimental import preprocessing
+
+from PIL import Image
+
 app = Flask(__name__)
+
+def load_image(file_name):
+	image = Image.open(file_name)
+	pixels = image.load()
+	width, height = image.size
+
+	rows = []
+	for x in range(0, width):
+		column = []
+		for y in range(0, height):
+			pixel = pixels[y, x][0] / 255
+			column.append(pixel)
+		rows.append(column)
+
+	return np.asarray(rows)
 
 def get_file_type(image_bytes):
 	if image_bytes[0:4] == b"\x89PNG":
@@ -79,7 +98,7 @@ def crop_image(image, quadrant):
 
 	return np.asarray(rows)
 
-def crop_set(x_set, y_set, debug_level):
+def crop_set(x_set, y_set, quadrant_range, debug_level):
 	if debug_level >= 1:
 		print("Cropping set...")
 
@@ -91,7 +110,7 @@ def crop_set(x_set, y_set, debug_level):
 		if debug_level >= 2:
 			print_image(image)
 
-		for i in range(0, 4):
+		for i in quadrant_range:
 			cropped = crop_image(image, i)
 			cropped_x_set.append(cropped)
 			new_y_set.append(classification)
@@ -102,7 +121,11 @@ def crop_set(x_set, y_set, debug_level):
 	if debug_level >= 1:
 		print("Done cropping set")
 
-	return (np.asarray(cropped_x_set), np.asarray(new_y_set))
+	x_set = np.asarray(cropped_x_set)
+	x_set[x_set < 160] = 0
+	x_set[x_set >= 160] = 255
+
+	return (x_set, np.asarray(new_y_set))
 
 def test_consensus_accuracy(model, x_test, y_test):
 	print("Testing model using group consensus:")
@@ -126,12 +149,93 @@ def test_consensus_accuracy(model, x_test, y_test):
 	accuracy = correct / (correct + incorrect)
 	print(f"Consensus accuracy: {accuracy}")
 
+def load_separate_models(file_name, debug_level = 0):
+	results = []
+	predictions_results = []
+
+	(_, _), (_, correct_results) = mnist.load_data()
+
+	for i in range(0, 4):
+		separate_file_name = f"/home/me/School/Fall 2022/CSE535/FlaskServer/{file_name}.{i}"
+		if not os.path.exists(separate_file_name):
+			(x_train, y_train), (x_test, y_test) = mnist.load_data()
+
+			(x_train, y_train) = crop_set(x_train, y_train, range(i, i + 1), debug_level)
+			(x_test, y_test) = crop_set(x_test, y_test, range(i, i + 1), debug_level)
+
+			image_size = 14
+
+			x_train = x_train / 255
+			x_test = x_test / 255
+			x_train = x_train.reshape(-1, image_size, image_size, 1)
+			x_test = x_test.reshape(-1, image_size, image_size, 1)
+
+			model = models.Sequential()
+
+			model.add(Conv2D(64, kernel_size = (3, 3), activation = "relu", input_shape = (image_size, image_size, 1)))
+			model.add(MaxPooling2D((2, 2)))
+
+			model.add(Conv2D(128, kernel_size = (3, 3), activation = "relu"))
+			model.add(MaxPooling2D((2, 2)))
+
+			model.add(Flatten())
+			model.add(Dense(256, activation = 'relu'))
+
+			model.add(Dense(10, activation = "softmax"))
+
+			model.compile(
+				optimizer = tf.keras.optimizers.Adam(
+					learning_rate = 0.003,
+					beta_1 = 0.8,
+    			beta_2 = 0.99,
+				),
+				loss = "sparse_categorical_crossentropy",
+				metrics = ["sparse_categorical_accuracy"]
+			)
+
+			model.fit(x_train, y_train, epochs = 10, use_multiprocessing = True, workers = 24)
+
+			model.evaluate(x_test, y_test)
+			model.save(separate_file_name)
+
+		model = tf.keras.models.load_model(separate_file_name)
+		results.append(model)
+
+		converter = tf.lite.TFLiteConverter.from_keras_model(model)
+		tflite_model = converter.convert()
+		open(f"model.tflite.{i}" , "wb") .write(tflite_model)
+
+		(_, _), (x_test, y_test) = mnist.load_data()
+		(x_test, y_test) = crop_set(x_test, y_test, range(i, i + 1), debug_level)
+
+		model_predictions = model.predict(x_test)
+		for i in range(0, len(model_predictions)):
+			prediction = np.argmax(model_predictions[i])
+			if i >= len(predictions_results):
+				predictions_results.append([])
+			predictions_results[i].append(prediction)
+
+	correct = 0
+	incorrect = 0
+	for i in range(0, len(predictions_results)):
+		prediction = np.argmax(np.bincount(predictions_results[i]))
+
+		if prediction == correct_results[i]:
+			correct += 1
+		else:
+			incorrect += 1
+
+	accuracy = correct / (correct + incorrect)
+	print(f"Consensus accuracy: {accuracy}")
+
+	return models
+
 def load_model(file_name, debug_level = 0):
 	if not os.path.isfile(file_name):
 		(x_train, y_train), (x_test, y_test) = mnist.load_data()
 
-		(x_train, y_train) = crop_set(x_train, y_train, debug_level)
-		(x_test, y_test) = crop_set(x_test, y_test, debug_level)
+		(x_train, y_train) = crop_set(x_train, y_train, range(0, 4), debug_level)
+		(x_test, y_test) = crop_set(x_test, y_test, range(0, 4), debug_level)
 
 		image_size = 14
 
@@ -140,34 +244,26 @@ def load_model(file_name, debug_level = 0):
 		x_train = x_train.reshape(-1, image_size, image_size, 1)
 		x_test = x_test.reshape(-1, image_size, image_size, 1)
 
-		# key: (classification, quadrant)
-		training_bins = {}
-		for i in range(0, len(x_train), 4):
-			for quadrant in range(0, 4):
-				classification = y_train[i]
-				if (classification, quadrant) not in training_bins:
-					training_bins[(classification, quadrant)] = []
-
-				training_bins[(classification, quadrant)].append(x_train[i + quadrant])
-
 		model = models.Sequential()
 
 		model.add(Conv2D(64, kernel_size = (7, 7), activation = "relu", input_shape = (image_size, image_size, 1), padding = "same"))
 		model.add(BatchNormalization(axis = 3))
 		model.add(Activation('relu'))
 		model.add(MaxPooling2D((2, 2)))
+		model.add(Dropout(0.3))
 
 		model.add(Conv2D(128, kernel_size = (7, 7), activation = "relu", padding = "same"))
 		model.add(BatchNormalization(axis = 3))
 		model.add(Activation('relu'))
 		model.add(MaxPooling2D((2, 2)))
+		model.add(Dropout(0.3))
 
 		model.add(Conv2D(128, kernel_size = (7, 7), activation = "relu", padding = "same"))
 		model.add(BatchNormalization(axis = 3))
 		model.add(Activation('relu'))
 		model.add(MaxPooling2D((2, 2)))
+		model.add(Dropout(0.3))
 
-		model.add(Dropout(0.2))
 		model.add(Flatten())
 		model.add(Dense(256, activation = 'relu'))
 		model.add(Dropout(0.4))
@@ -177,10 +273,10 @@ def load_model(file_name, debug_level = 0):
 		model.compile(
 			optimizer = "adam",
 			loss = "sparse_categorical_crossentropy",
-			metrics = ["accuracy"]
+			metrics = ["sparse_categorical_accuracy"]
 		)
 
-		model.fit(x_train, y_train, epochs = 20)
+		model.fit(x_train, y_train, epochs = 20, use_multiprocessing = True, workers = 24)
 
 		model.evaluate(x_test, y_test)
 		model.save(file_name)
@@ -191,18 +287,9 @@ def load_model(file_name, debug_level = 0):
 	tflite_model = converter.convert()
 	open("model.tflite" , "wb") .write(tflite_model)
 
-	interpreter = tf.lite.Interpreter(model_path = "model.tflite")
-	interpreter.allocate_tensors()
-
-	print(interpreter.get_input_details()[0]['shape'])
-	print(interpreter.get_input_details()[0]['dtype'])
-
-	print(interpreter.get_output_details()[0]['shape'])
-	print(interpreter.get_output_details()[0]['dtype'])
-
 	if debug_level >= 1:
 		(x_train, y_train), (x_test, y_test) = mnist.load_data()
-		(x_test, y_test) = crop_set(x_test, y_test, debug_level)
+		(x_test, y_test) = crop_set(x_test, y_test, range(0, 4), debug_level)
 
 		x_test = x_test / 255
 		x_test = x_test.reshape(-1, 14, 14, 1)
@@ -211,7 +298,38 @@ def load_model(file_name, debug_level = 0):
 
 	return model
 
+def test_model_against_file():
+	interpreter = tf.lite.Interpreter(model_path = "model.tflite")
+	interpreter.allocate_tensors()
+	print(interpreter.get_signature_list())
+	tflite_model = interpreter.get_signature_runner()
+
+	image = load_image("../2-full.png")
+	images = []
+	images.append(crop_image(image, 0))
+	images.append(crop_image(image, 1))
+	images.append(crop_image(image, 2))
+	images.append(crop_image(image, 3))
+
+	for i in images:
+		print_image(i, divisor = 255)
+
+	x_test = np.asarray(images, dtype = np.float32).reshape(-1, 14, 14, 1)
+	y_test = [2]
+	test_consensus_accuracy(model, x_test, y_test)
+
+	predictions = tflite_model(conv2d_input = x_test)["dense_1"]
+	consensus = np.argmax(
+		np.bincount(np.argmax(
+				predictions,
+				axis = 1
+		))
+	)
+
+	print(f"tflite consensus: {consensus}")
+
 model = load_model("model.h5", 1)
+# models = load_separate_models("model.h5", 1)
 
 def predict_digit(model, image_bytes): # takes image file name and classifies it
 	img_size = 28
