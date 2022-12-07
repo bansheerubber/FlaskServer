@@ -156,7 +156,7 @@ def image_upload():
 	request_data = request.get_json()
 	imageData = request_data["imageData"]
 	position = request_data["position"]
-	
+
 	# decode the image
 	try:
 		decoded = base64.decodebytes(imageData.encode())
@@ -165,6 +165,7 @@ def image_upload():
 		# print("cmodel",cmodel)
 		predictions = predict_digit(getModel(position=position), decoded)
 		classification = str(np.argmax(predictions))
+		# print("position: ",position,"list: ",predictions.tolist())
 		
 		
 		extension = get_file_type(decoded)
@@ -197,5 +198,6 @@ def image_upload():
 	return {
 		"statusCode": 200,
 		"predictions": predictions.tolist(),
-		"classification": classification
+		"classification": classification,
+		"position": position
 	}
