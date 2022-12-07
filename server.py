@@ -226,6 +226,17 @@ def getModel(position):
 	else:
 		return bottomright
 
+def returnPosition(position):
+	pos = str(position)
+	if pos == "0":
+		return "Top Left"
+	elif pos == "1":
+		return "Top Right"
+	elif pos == "2":
+		return "Bottom Left"
+	else:
+		return "Bottom Right"
+
 @app.route("/")
 def server_home():
 	return "<p>Server Running!</p>"
@@ -240,7 +251,7 @@ def image_upload():
 	request_data = request.get_json()
 	imageData = request_data["imageData"]
 	position = request_data["position"]
-
+	print("Received request for:",returnPosition(position))
 	# decode the image
 	try:
 		decoded = base64.decodebytes(imageData.encode())
